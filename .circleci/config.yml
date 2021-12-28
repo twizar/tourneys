@@ -1,0 +1,65 @@
+version: 2.1
+
+workflows:
+  version: 2
+  deploy:
+    jobs:
+      - lint:
+          context: Twizar
+      - test:
+          context: Twizar
+      - compile-app-bin:
+          context: Twizar
+          requires:
+            - lint
+            - test
+      - deploy:
+          context: Twizar
+          requires:
+            - compile-app-bin
+
+orbs:
+  aws-cli: circleci/aws-cli@2.0.3
+  codecov: codecov/codecov@3.2.0
+
+jobs:
+  lint:
+    docker:
+      - image: golangci/golangci-lint:latest-alpine
+    steps:
+      - checkout
+      - run: git config --global url."https://${GITHUB_TOKEN}:x-oauth-basic@github.com/".insteadOf "https://github.com/"
+      - run: golangci-lint run -v
+  test:
+    docker:
+      - image: cimg/go:1.17.2
+      - image: mongo:5.0.3
+        environment:
+          MONGO_INITDB_ROOT_USERNAME: root
+          MONGO_INITDB_ROOT_PASSWORD: 123
+    steps:
+      - run: env
+      - checkout
+      - run: git config --global url."https://${GITHUB_TOKEN}:x-oauth-basic@github.com/".insteadOf "https://github.com/"
+      - run: go test -race -coverprofile=coverage.txt -covermode=atomic -cover -v ./...
+      - codecov/upload
+  compile-app-bin:
+    docker:
+      - image: cimg/go:1.17.2
+    steps:
+      - checkout
+      - run: git config --global url."https://${GITHUB_TOKEN}:x-oauth-basic@github.com/".insteadOf "https://github.com/"
+      - run: GOOS=linux GOARCH=amd64 go build -o /tmp/tourneys_bin ./cmd/main.go
+      - persist_to_workspace:
+          root: /tmp
+          paths:
+            - ./tourneys_bin
+  deploy:
+    docker:
+      - image: cimg/python:3.10
+    steps:
+      - attach_workspace:
+          at: .
+      - aws-cli/setup
+      - run: zip tourneys.zip tourneys_bin
+      - run: aws lambda update-function-code --function-name LambdaTourneys --zip-file fileb://tourneys.zip
